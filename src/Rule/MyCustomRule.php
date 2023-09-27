@@ -19,6 +19,8 @@ class MyCustomRule extends AbstractRector  implements ConfigurableRectorInterfac
 
     private array $configurations = [];
 
+    private bool $hasChanged = false;
+
     /**
      * @param UseImportsResolver $useImportsResolver
      */
@@ -42,15 +44,21 @@ class MyCustomRule extends AbstractRector  implements ConfigurableRectorInterfac
      */
     public function getNodeTypes(): array
     {
-        return [Node\AttributeGroup::class];
+        return [Node\Stmt\Property::class];
     }
 
     /**
-     * @param Node $node
+     * @param Node\Stmt\Property $node
      * @return null
      */
     public function refactor(Node $node)
     {
+        if ($node->attrGroups === []) {
+            return null;
+        }
+
+        $this->hasChanged = false;
+
         $uses = $this->useImportsResolver->resolveBareUses();
         foreach ($uses as $use) {
             foreach ($use->uses as $useUse) {
@@ -68,32 +76,38 @@ class MyCustomRule extends AbstractRector  implements ConfigurableRectorInterfac
             }
         }
 
-        foreach ($node->attrs as $keyAttr => $attr) {
-            foreach ($attr->args as $key => $arg) {
-                $hasChanged = $this->processArgs($arg);
+        foreach ($node->attrGroups as $attrGroup) {
+            foreach ($attrGroup->attrs as $keyAttr => $attr) {
+                foreach ($attr->args as $key => $arg) {
+                    $hasChanged = $this->processArgs($arg);
 
-                if ($hasChanged) {
-                    continue;
-                }
-
-                if ($arg->value instanceof Node\Expr\Array_) {
-                    foreach ($arg->value->items as $keyItem => $item) {
-                        if (!is_array($item->value->args)) {
-                            continue;
-                        }
-                        foreach ($item->value->args as $key2 => $arg2) {
-                            $this->processArgs($arg2);
-                            $item->value->args[$key2] = $arg2;
-                        }
-                        $arg->value->items[$keyItem] = $item;
+                    if ($hasChanged) {
+                        continue;
                     }
+
+                    if ($arg->value instanceof Node\Expr\Array_) {
+                        foreach ($arg->value->items as $keyItem => $item) {
+                            if (!is_array($item->value->args)) {
+                                continue;
+                            }
+                            foreach ($item->value->args as $key2 => $arg2) {
+                                $this->processArgs($arg2);
+                                $item->value->args[$key2] = $arg2;
+                            }
+                            $arg->value->items[$keyItem] = $item;
+                        }
+                    }
+                    if ($arg->value instanceof Node\Arg) {
+                        $this->processArgs($arg->value);
+                    }
+                    $attr->args[$key] = $arg;
                 }
-                if ($arg->value instanceof Node\Arg) {
-                    $this->processArgs($arg->value);
-                }
-                $attr->args[$key] = $arg;
+                $attrGroup->attrs[$keyAttr] = $attr;
             }
-            $node->attrs[$keyAttr] = $attr;
+        }
+
+        if ($this->hasChanged) {
+            return $node;
         }
 
         return null;
@@ -106,8 +120,6 @@ class MyCustomRule extends AbstractRector  implements ConfigurableRectorInterfac
      */
     private function processArgs(Node\Arg $arg): bool
     {
-        $hasChanged = false;
-
         if ($arg->value instanceof Node\Expr\New_) {
             foreach ($this->configurations as $configuration) {
                 if (
@@ -134,19 +146,19 @@ class MyCustomRule extends AbstractRector  implements ConfigurableRectorInterfac
                     }
 
                     $arg->name = new Node\Identifier($configuration[1]);
-                    $hasChanged = true;
+                    $this->hasChanged = true;
                 } else {
                     //no alias, just look for the class name
                     $arrayClassName = explode("\\", $configuration[0]);
                     if (end($arg->value->class->parts) === end($arrayClassName)) {
                         $arg->name = new Node\Identifier($configuration[1]);
-                        $hasChanged = true;
+                        $this->hasChanged = true;
                     }
                 }
             }
         }
 
-        return $hasChanged;
+        return $this->hasChanged;
     }
 
     /**
